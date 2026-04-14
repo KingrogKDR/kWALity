@@ -30,7 +30,7 @@ func NewDefaultLogger(w *WAL) *DefaultLogger {
 
 func (l *DefaultLogger) Log(level Level, msg string, fields map[string]any) error {
 	record := &LogRecord{
-		LSN:      0, // you will manage later
+		LSN:      0, // will manage later
 		TxnID:    0,
 		OldValue: nil,
 		NewValue: []byte(msg), // simple for now
