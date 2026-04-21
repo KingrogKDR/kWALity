@@ -3,17 +3,16 @@ package kWALity
 import (
 	"bufio"
 	"context"
-	"hash/crc32"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
-
-	"github.com/KingrogKDR/kWALity/internal/record"
 )
 
 const (
-	segmentPrefix = "segment-"
+	segmentPrefix = "segment"
 	syncInterval  = 100 * time.Millisecond
 )
 
@@ -32,63 +31,90 @@ type Wal struct {
 	cancel    context.CancelFunc
 }
 
-func OpenWal(dirPath string) (*Wal, error) {
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		return nil, err
-	}
+type WalOpts struct {
+	DirPath     string
+	SegmentSize int64
+	MaxSegments int
+}
 
-	filePath := filepath.Join(dirPath, segmentPrefix)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
-	if err != nil {
+func Open(opts WalOpts) (*Wal, error) {
+	if err := os.MkdirAll(opts.DirPath, 0755); err != nil {
 		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	wal := &Wal{
-		dir: dirPath,
+	w := &Wal{
+		dir: opts.DirPath,
 
-		currentSegment:    f,
-		segmentByteOffset: 0,
-		maxSegmentSize:    1024,
-		maxSegments:       10,
+		maxSegmentSize: defaultFallback(opts.SegmentSize, 4*1024*1024),
+		maxSegments:    defaultFallback(opts.MaxSegments, 10),
 
-		bufWriter: bufio.NewWriter(f),
 		syncTimer: time.NewTimer(syncInterval),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
 
-	return wal, err
+	pattern := filepath.Join(opts.DirPath, fmt.Sprintf("%s-*", segmentPrefix))
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var currentPath string
+
+	if len(matches) == 0 {
+		currentPath = filepath.Join(opts.DirPath, fmt.Sprintf("%s-%d.log", segmentPrefix, time.Now().UnixNano()))
+
+		f, err := os.OpenFile(currentPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		w.currentSegment = f
+		w.segmentByteOffset = 0
+	} else {
+		sort.Strings(matches)
+
+		currentPath = matches[len(matches)-1]
+
+		f, err := os.OpenFile(currentPath, os.O_APPEND|os.O_RDWR, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		w.currentSegment = f
+
+		info, err := f.Stat()
+		if err != nil {
+			return nil, err
+		}
+
+		w.segmentByteOffset = uint64(info.Size())
+	}
+
+	w.bufWriter = bufio.NewWriter(w.currentSegment)
+
+	if err := w.recover(); err != nil {
+		return nil, err
+	}
+
+	go w.syncLoop()
+
+	return w, nil
 }
 
-func (w *Wal) Append(tx_id int64, data []byte) (int, error) {
+func (w *Wal) Append(transactionID int64, data []byte) (uint64, error) {
 	w.mut.Lock()
 	defer w.mut.Unlock()
 
-	return w.writeEntryToBuffer(tx_id, data)
+	return w.writeEntryToBuffer(transactionID, data)
 }
 
-func (w *Wal) writeEntryToBuffer(tx_id int64, data []byte) (int, error) {
-	entry := &record.WalEntry{
-		Lsn:           w.segmentByteOffset,
-		TransactionId: tx_id,
-		Timestamp:     time.Now(),
-		Data:          data,
-	}
+func (w *Wal) Sync() {
 
-	encoded := record.MustMarshal(entry)
+}
 
-	entry.CRC = crc32.ChecksumIEEE(encoded)
+func (w *Wal) Close() {
 
-	finalEntry := record.MustMarshal(entry)
-
-	n, err := w.bufWriter.Write(finalEntry)
-	if err != nil {
-		return 0, err
-	}
-
-	w.segmentByteOffset += uint64(n)
-
-	return n, nil
 }
