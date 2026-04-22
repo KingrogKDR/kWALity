@@ -8,12 +8,10 @@ import (
 )
 
 func main() {
-	walOpts := kWALity.WalOpts{
-		DirPath: "write-ahead-log",
-	}
-	wal, err := kWALity.Open(walOpts)
+	wal, err := kWALity.Open("wal-dir")
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
+	wal.Close()
 	fmt.Printf("%+v\n", wal)
 }

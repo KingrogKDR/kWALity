@@ -5,98 +5,113 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 )
 
 const (
 	segmentPrefix = "segment"
-	syncInterval  = 100 * time.Millisecond
 )
 
 type Wal struct {
 	dir string
 
-	currentSegment    *os.File
-	segmentByteOffset uint64
-	maxSegmentSize    int64
-	maxSegments       int
+	globalLSN      uint64
+	nextSegmentID  uint64
+	currentSegment *os.File
+	maxSegmentSize int64
+	maxSegments    int
+	segmentOffset  uint64
 
-	bufWriter *bufio.Writer
-	syncTimer *time.Timer
-	mut       sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	bufWriter    *bufio.Writer
+	syncInterval time.Duration
+	mut          sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
-type WalOpts struct {
-	DirPath     string
-	SegmentSize int64
-	MaxSegments int
+type Option func(w *Wal)
+
+func SegmentSizeOpt(size int64) Option {
+	return func(w *Wal) {
+		w.maxSegmentSize = size
+	}
 }
 
-func Open(opts WalOpts) (*Wal, error) {
-	if err := os.MkdirAll(opts.DirPath, 0755); err != nil {
-		return nil, err
+func MaxSegmentsOpt(n int) Option {
+	return func(w *Wal) {
+		w.maxSegments = n
+	}
+}
+
+func SyncIntervalOpt(d time.Duration) Option {
+	return func(w *Wal) {
+		w.syncInterval = d
+	}
+}
+
+func Open(dir string, opts ...Option) (*Wal, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("couldn't create directory: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Wal{
-		dir: opts.DirPath,
+		dir: dir,
 
-		maxSegmentSize: defaultFallback(opts.SegmentSize, 4*1024*1024),
-		maxSegments:    defaultFallback(opts.MaxSegments, 10),
+		globalLSN:      0,
+		maxSegmentSize: 4 * 1024 * 1024,
+		maxSegments:    10,
 
-		syncTimer: time.NewTimer(syncInterval),
-		ctx:       ctx,
-		cancel:    cancel,
+		syncInterval: 100 * time.Millisecond,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
-	pattern := filepath.Join(opts.DirPath, fmt.Sprintf("%s-*", segmentPrefix))
-	matches, err := filepath.Glob(pattern)
+	// apply custom options
+	for _, opt := range opts {
+		opt(w)
+	}
+
+	// match for all sorted segments in the directory
+	segs, err := listSegmentsSorted(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("couldn't list segments: %w", err)
 	}
 
-	var currentPath string
+	if len(segs) == 0 {
+		w.nextSegmentID = 1
+		f, err := w.createNewSegment()
 
-	if len(matches) == 0 {
-		currentPath = filepath.Join(opts.DirPath, fmt.Sprintf("%s-%d.log", segmentPrefix, time.Now().UnixNano()))
-
-		f, err := os.OpenFile(currentPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("couldn't create new segment: %w", err)
 		}
 
 		w.currentSegment = f
-		w.segmentByteOffset = 0
+		w.segmentOffset = 0
 	} else {
-		sort.Strings(matches)
+		w.nextSegmentID = segs[len(segs)-1].id + 1
 
-		currentPath = matches[len(matches)-1]
+		f, err := getCurrentSegment(segs)
 
-		f, err := os.OpenFile(currentPath, os.O_APPEND|os.O_RDWR, 0644)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("couldn't get current segment: %w", err)
 		}
 
 		w.currentSegment = f
 
 		info, err := f.Stat()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed getting current segment info: %w", err)
 		}
-
-		w.segmentByteOffset = uint64(info.Size())
+		w.segmentOffset = uint64(info.Size())
 	}
 
 	w.bufWriter = bufio.NewWriter(w.currentSegment)
 
 	if err := w.recover(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("couldn't recover wal: %w", err)
 	}
 
 	go w.syncLoop()
@@ -105,16 +120,41 @@ func Open(opts WalOpts) (*Wal, error) {
 }
 
 func (w *Wal) Append(transactionID int64, data []byte) (uint64, error) {
+	lsn, err := w.writeEntryToBuffer(transactionID, data)
+
+	if err != nil {
+		return 0, fmt.Errorf("couldn't write wal entry to buffer: %w", err)
+	}
+
+	return lsn, nil
+}
+
+func (w *Wal) Sync() error {
 	w.mut.Lock()
 	defer w.mut.Unlock()
 
-	return w.writeEntryToBuffer(transactionID, data)
+	if w.bufWriter != nil {
+		err := w.bufWriter.Flush()
+		if err != nil {
+			return fmt.Errorf("flush failed: %w", err)
+		}
+	}
+
+	if w.currentSegment != nil {
+		err := w.currentSegment.Sync()
+		if err != nil {
+			return fmt.Errorf("fsync failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
-func (w *Wal) Sync() {
+func (w *Wal) Close() error {
+	w.cancel()
+	if err := w.Sync(); err != nil {
+		return err
+	}
 
-}
-
-func (w *Wal) Close() {
-
+	return w.currentSegment.Close()
 }

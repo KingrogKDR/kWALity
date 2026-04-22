@@ -8,8 +8,8 @@ import (
 type walEntryPayload struct {
 	Lsn           uint64 `json:"lsn"`
 	TransactionId int64  `json:"tx_id"`
-	Timestamp     int64  `json:"timestamp"`
 	Data          []byte `json:"data"`
+	Timestamp     int64  `json:"timestamp"`
 }
 
 func mustMarshal(entry walEntryPayload) []byte {
