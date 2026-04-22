@@ -145,7 +145,7 @@ func TestRotateSegment(t *testing.T) {
 
 	oldestBefore := before[0]
 
-	if err := wal.rotateSegment(); err != nil {
+	if err := wal.rotateSegment(true); err != nil {
 		t.Fatalf("rotate failed: %v", err)
 	}
 

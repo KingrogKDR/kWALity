@@ -27,7 +27,7 @@ func listAllSegments(dir string) ([]string, error) {
 }
 
 func parseSegmentID(path string) (uint64, error) {
-	base := filepath.Base(path) // e.g segment-000001.log
+	base := filepath.Base(path) // e.g segment-1.log
 
 	var id uint64
 	_, err := fmt.Sscanf(base, "segment-%d.log", &id)
@@ -57,7 +57,7 @@ func listSegmentsSorted(dir string) ([]segment, error) {
 }
 
 func (w *Wal) createNewSegment() (*os.File, error) {
-	currentPath := filepath.Join(w.dir, fmt.Sprintf("%s-%06d.log", segmentPrefix, w.nextSegmentID))
+	currentPath := filepath.Join(w.dir, fmt.Sprintf("%s-%d.log", segmentPrefix, w.nextSegmentID))
 	w.nextSegmentID++
 
 	f, err := os.OpenFile(currentPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
@@ -83,14 +83,7 @@ func getCurrentSegment(segs []segment) (*os.File, error) {
 	return f, nil
 }
 
-func (w *Wal) rotateSegment() error {
-	w.mut.Lock()
-	defer w.mut.Unlock()
-
-	return w.rotateSegmentLocked(true)
-}
-
-func (w *Wal) rotateSegmentLocked(removeOldest bool) error {
+func (w *Wal) rotateSegment(removeOldest bool) error {
 	if w.bufWriter != nil {
 		if err := w.bufWriter.Flush(); err != nil {
 			return fmt.Errorf("failed to flush current segment: %w", err)
@@ -163,11 +156,11 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 
 		shouldRotate := w.maxSegments > 0 && len(matches) >= w.maxSegments
 		if shouldRotate {
-			if err := w.rotateSegmentLocked(true); err != nil {
+			if err := w.rotateSegment(true); err != nil {
 				return 0, fmt.Errorf("couldn't rotate segment: %w", err)
 			}
 		} else {
-			if err := w.rotateSegmentLocked(false); err != nil {
+			if err := w.rotateSegment(false); err != nil {
 				return 0, fmt.Errorf("couldn't create next segment: %w", err)
 			}
 		}
