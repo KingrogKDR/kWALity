@@ -80,6 +80,7 @@ func Open(dir string, opts ...Option) (*Wal, error) {
 		return nil, fmt.Errorf("couldn't list segments: %w", err)
 	}
 
+	// create a new segment if none is present, otherwise get the current segment and mark its offset
 	if len(segs) == 0 {
 		w.nextSegmentID = 1
 		f, err := w.createNewSegment()
@@ -110,6 +111,7 @@ func Open(dir string, opts ...Option) (*Wal, error) {
 
 	w.bufWriter = bufio.NewWriter(w.currentSegment)
 
+	// repair/recover the segment before syncing
 	if err := w.recover(); err != nil {
 		return nil, fmt.Errorf("couldn't recover wal: %w", err)
 	}

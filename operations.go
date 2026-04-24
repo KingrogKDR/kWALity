@@ -30,7 +30,7 @@ func parseSegmentID(path string) (uint64, error) {
 	base := filepath.Base(path) // e.g segment-1.log
 
 	var id uint64
-	_, err := fmt.Sscanf(base, "segment-%d.log", &id)
+	_, err := fmt.Sscanf(base, "segment-%d.log", &id) // extract 1 from segment-1.log
 	return id, err
 }
 
@@ -140,13 +140,18 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 
 	crc := crc32.ChecksumIEEE(payload)
 
-	// Final wal entry layout: [len (4 bytes)][crc(4 bytes)][payload]
+	// Final wal entry layout: [len (4 bytes)][crc (4 bytes)][payload]
 	totalLen := 4 + 4 + len(payload)
 
 	if int64(totalLen) > w.maxSegmentSize {
 		return 0, fmt.Errorf("wal entry size %d exceeds max segment size %d", totalLen, w.maxSegmentSize)
 	}
 
+	// check if remaining segment size is less than the entry size
+	// if no, write to buffer
+	// if yes, create a new one in two ways:
+	// Case 1:if the no. of segments has crossed max threshold, then replace the oldest segment and
+	// Case 2: if not crossed the max threshold, then just create a new one
 	remaining := w.maxSegmentSize - int64(w.segmentOffset)
 	if remaining < int64(totalLen) {
 		matches, err := listSegmentsSorted(w.dir)
@@ -177,6 +182,7 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 		return 0, err
 	}
 
+	// update globalLSN and segment offset by adding the bytes written.
 	lsn := w.globalLSN
 	w.globalLSN += uint64(n)
 	w.segmentOffset += uint64(n)
