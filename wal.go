@@ -106,6 +106,13 @@ func Open(dir string, opts ...Option) (*Wal, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed getting current segment info: %w", err)
 		}
+
+		fileSize := info.Size()
+		if fileSize >= w.maxSegmentSize {
+			if err := w.rotate(segs); err != nil {
+				return nil, err
+			}
+		}
 		w.segmentOffset = uint64(info.Size())
 	}
 

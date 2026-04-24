@@ -83,6 +83,22 @@ func getCurrentSegment(segs []segment) (*os.File, error) {
 	return f, nil
 }
 
+func (w *Wal) rotate(segs []segment) error {
+	// Case 1:if the no. of segments has crossed max threshold, then replace the oldest segment and
+	// Case 2: if not crossed the max threshold, then just create a new one
+	shouldRotate := w.maxSegments > 0 && len(segs) >= w.maxSegments
+	if shouldRotate {
+		if err := w.rotateSegment(true); err != nil {
+			return fmt.Errorf("couldn't rotate segment: %w", err)
+		}
+	} else {
+		if err := w.rotateSegment(false); err != nil {
+			return fmt.Errorf("couldn't create next segment: %w", err)
+		}
+	}
+	return nil
+}
+
 func (w *Wal) rotateSegment(removeOldest bool) error {
 	if w.bufWriter != nil {
 		if err := w.bufWriter.Flush(); err != nil {
@@ -149,9 +165,7 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 
 	// check if remaining segment size is less than the entry size
 	// if no, write to buffer
-	// if yes, create a new one in two ways:
-	// Case 1:if the no. of segments has crossed max threshold, then replace the oldest segment and
-	// Case 2: if not crossed the max threshold, then just create a new one
+	// if yes, rotate segment:
 	remaining := w.maxSegmentSize - int64(w.segmentOffset)
 	if remaining < int64(totalLen) {
 		matches, err := listSegmentsSorted(w.dir)
@@ -159,15 +173,8 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 			return 0, fmt.Errorf("couldn't list segments: %w", err)
 		}
 
-		shouldRotate := w.maxSegments > 0 && len(matches) >= w.maxSegments
-		if shouldRotate {
-			if err := w.rotateSegment(true); err != nil {
-				return 0, fmt.Errorf("couldn't rotate segment: %w", err)
-			}
-		} else {
-			if err := w.rotateSegment(false); err != nil {
-				return 0, fmt.Errorf("couldn't create next segment: %w", err)
-			}
+		if err := w.rotate(matches); err != nil {
+			return 0, err
 		}
 	}
 
