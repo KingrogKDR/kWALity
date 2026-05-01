@@ -21,7 +21,7 @@ func listAllSegments(dir string) ([]string, error) {
 	pattern := filepath.Join(dir, fmt.Sprintf("%s-*", segmentPrefix))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't list segments for rotation: %w", err)
+		return nil, err
 	}
 	return matches, nil
 }
@@ -84,7 +84,7 @@ func getCurrentSegment(segs []segment) (*os.File, error) {
 }
 
 func (w *Wal) rotate(segs []segment) error {
-	// Case 1:if the no. of segments has crossed max threshold, then replace the oldest segment and
+	// Case 1:if the no. of segments has crossed max threshold, then replace the oldest segment
 	// Case 2: if not crossed the max threshold, then just create a new one
 	shouldRotate := w.maxSegments > 0 && len(segs) >= w.maxSegments
 	if shouldRotate {
@@ -102,24 +102,24 @@ func (w *Wal) rotate(segs []segment) error {
 func (w *Wal) rotateSegment(removeOldest bool) error {
 	if w.bufWriter != nil {
 		if err := w.bufWriter.Flush(); err != nil {
-			return fmt.Errorf("failed to flush current segment: %w", err)
+			return err
 		}
 	}
 
 	if w.currentSegment != nil {
 		if err := w.currentSegment.Sync(); err != nil {
-			return fmt.Errorf("failed to sync current segment: %w", err)
+			return err
 		}
 
 		if err := w.currentSegment.Close(); err != nil {
-			return fmt.Errorf("failed to close current segment: %w", err)
+			return err
 		}
 	}
 
 	if removeOldest {
 		segs, err := listSegmentsSorted(w.dir)
 		if err != nil {
-			return err
+			return fmt.Errorf("couldn't list segments: %w", err)
 		}
 
 		if len(segs) > 0 {
