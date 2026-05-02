@@ -2,9 +2,7 @@ package kWALity
 
 import (
 	"bufio"
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"log"
 	"os"
 	"path/filepath"
@@ -141,33 +139,35 @@ func (w *Wal) rotateSegment(removeOldest bool) error {
 	return nil
 }
 
-func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
+func (w *Wal) writeEntryToBuffer(txID int64, typ uint16, data []byte) (uint64, error) {
 	w.mut.Lock()
 	defer w.mut.Unlock()
 
-	entry := walEntryPayload{
+	entry := record{
 		Lsn:           w.globalLSN,
 		TransactionId: txID,
-		Data:          data,
 		Timestamp:     time.Now().UnixNano(),
+		Type:          typ,
+		DataLen:       uint32(len(data)),
+		Data:          data,
 	}
 
-	payload := mustMarshal(entry)
+	recordData, err := entry.encode()
+	if err != nil {
+		return 0, fmt.Errorf("couldn't encode record: %w", err)
+	}
 
-	crc := crc32.ChecksumIEEE(payload)
+	recordLen := len(recordData)
 
-	// Final wal entry layout: [len (4 bytes)][crc (4 bytes)][payload]
-	totalLen := 4 + 4 + len(payload)
-
-	if int64(totalLen) > w.maxSegmentSize {
-		return 0, fmt.Errorf("wal entry size %d exceeds max segment size %d", totalLen, w.maxSegmentSize)
+	if int64(recordLen) > w.maxSegmentSize {
+		return 0, fmt.Errorf("wal entry size %d exceeds max segment size %d", recordLen, w.maxSegmentSize)
 	}
 
 	// check if remaining segment size is less than the entry size
 	// if no, write to buffer
 	// if yes, rotate segment:
 	remaining := w.maxSegmentSize - int64(w.segmentOffset)
-	if remaining < int64(totalLen) {
+	if remaining < int64(recordLen) {
 		matches, err := listSegmentsSorted(w.dir)
 		if err != nil {
 			return 0, fmt.Errorf("couldn't list segments: %w", err)
@@ -178,26 +178,36 @@ func (w *Wal) writeEntryToBuffer(txID int64, data []byte) (uint64, error) {
 		}
 	}
 
-	buf := make([]byte, totalLen)
-
-	binary.LittleEndian.PutUint32(buf[0:4], uint32(len(payload)))
-	binary.LittleEndian.PutUint32(buf[4:8], crc)
-	copy(buf[8:], payload)
-
-	n, err := w.bufWriter.Write(buf)
+	err = w.writeFull(recordData)
 	if err != nil {
 		return 0, err
 	}
 
-	// update globalLSN and segment offset by adding the bytes written.
+	// update globalLSN and segment offset
 	lsn := w.globalLSN
-	w.globalLSN += uint64(n)
-	w.segmentOffset += uint64(n)
+	w.globalLSN++
+	w.segmentOffset += uint64(recordLen)
 
 	return lsn, nil
 }
 
-func (w *Wal) recover() error {
+func (w *Wal) writeFull(buf []byte) error {
+	written := 0
+	for written < len(buf) {
+		n, err := w.bufWriter.Write(buf[written:])
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("buffer writer is stuck: unable to write more bytes")
+		}
+		written += n
+	}
+	return nil
+}
+
+func (w *Wal) repair() error {
+	w.mut.Lock()
 	// Example:
 	// - scan records
 	// - validate checksums

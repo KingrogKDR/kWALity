@@ -119,7 +119,7 @@ func Open(dir string, opts ...Option) (*Wal, error) {
 	w.bufWriter = bufio.NewWriter(w.currentSegment)
 
 	// repair/recover the segment before syncing
-	if err := w.recover(); err != nil {
+	if err := w.repair(); err != nil {
 		return nil, fmt.Errorf("couldn't recover wal: %w", err)
 	}
 
@@ -128,8 +128,8 @@ func Open(dir string, opts ...Option) (*Wal, error) {
 	return w, nil
 }
 
-func (w *Wal) Append(transactionID int64, data []byte) (uint64, error) {
-	lsn, err := w.writeEntryToBuffer(transactionID, data)
+func (w *Wal) Append(transactionID int64, transactionType uint16, data []byte) (uint64, error) {
+	lsn, err := w.writeEntryToBuffer(transactionID, transactionType, data)
 
 	if err != nil {
 		return 0, fmt.Errorf("couldn't write wal entry to buffer: %w", err)
@@ -166,4 +166,10 @@ func (w *Wal) Close() error {
 	}
 
 	return w.currentSegment.Close()
+}
+
+// should give opts to user if they want to read from start or
+// continue reading from a point before the crash (this should be the default behaviour if not specified)
+func (w *Wal) Read(transactionID int64) (uint64, error) {
+	return 0, nil
 }
