@@ -6,15 +6,16 @@ import (
 	"os"
 )
 
-type WAL struct {
+type WAL[T any] struct {
+	codec          Codec[T]
 	currentSegment *os.File
 	MaxSegments    uint32
-	MaxSegmentSize uint64
-	MaxRecordSize  uint64
+	MaxSegmentSize uint32
+	MaxRecordSize  uint32
 }
 
-func (w *WAL) Append(entry WALEntry) error {
-	record, err := entry.Encode()
+func (w *WAL[T]) Append(data T) error {
+	record, err := EncodeRecord(w.codec, data)
 	if err != nil {
 		return fmt.Errorf("appending to WAL: %w", err)
 	}
@@ -26,7 +27,7 @@ func (w *WAL) Append(entry WALEntry) error {
 	return nil
 }
 
-func (w *WAL) writeToSegment(record []byte) error {
+func (w *WAL[T]) writeToSegment(record []byte) error {
 	// before writing to segment, first check if the segment size exceeds maxSegmentSize
 	// 	if noOfSegments > maxSegments, rotate,
 	// 	otherwise create a new segment and write to it
@@ -35,15 +36,15 @@ func (w *WAL) writeToSegment(record []byte) error {
 	return nil
 }
 
-func (w *WAL) rotateSegment() error {
+func (w *WAL[T]) rotateSegment() error {
 	return nil
 }
 
-func (w *WAL) Sync() error {
+func (w *WAL[T]) Sync() error {
 	return w.currentSegment.Sync()
 }
 
-func (w *WAL) recoverSegment() error {
+func (w *WAL[T]) recoverSegment() error {
 	info, err := w.currentSegment.Stat()
 	if err != nil {
 		return err
@@ -88,6 +89,6 @@ func (w *WAL) recoverSegment() error {
 			)
 		}
 
-		offset += int64(8 + 4 + len(payload))
+		offset += int64(1 + 4 + 4 + len(payload))
 	}
 }

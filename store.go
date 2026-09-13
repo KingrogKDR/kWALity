@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +11,8 @@ import (
 type WALOptions struct {
 	DirPath        string
 	MaxSegments    uint32
-	MaxSegmentSize uint64
-	MaxRecordSize  uint64
+	MaxSegmentSize uint32
+	MaxRecordSize  uint32
 }
 
 func DefaultWALOptions() WALOptions {
@@ -40,8 +41,8 @@ func mergeDefaults(opts WALOptions) WALOptions {
 	return defaults
 }
 
-func inspectDir(dir_name string) (bool, os.DirEntry, error) {
-	f, err := os.Open(dir_name)
+func inspectDir(dirName string) (bool, os.DirEntry, error) {
+	f, err := os.Open(dirName)
 	if err != nil {
 		return false, nil, err
 	}
@@ -71,13 +72,18 @@ func isRelevant(e os.DirEntry) bool {
 	return !e.IsDir() && strings.HasSuffix(e.Name(), ".wlog")
 }
 
-func Open(opts WALOptions) (*WAL, error) {
+func Open[T any](opts WALOptions, codec Codec[T]) (*WAL[T], error) {
 	opts = mergeDefaults(opts)
 	if err := os.MkdirAll(opts.DirPath, 0o750); err != nil {
 		return nil, fmt.Errorf("creating WAL directory: %w", err)
 	}
 
-	w := &WAL{
+	if opts.MaxRecordSize > opts.MaxSegmentSize {
+		return nil, errors.New("max record size exceeds max segment size")
+	}
+
+	w := &WAL[T]{
+		codec:          codec,
 		MaxSegments:    opts.MaxSegments,
 		MaxSegmentSize: opts.MaxSegmentSize,
 		MaxRecordSize:  opts.MaxRecordSize,
@@ -101,7 +107,7 @@ func Open(opts WALOptions) (*WAL, error) {
 
 	segment, err := os.OpenFile(
 		segmentPath,
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		os.O_CREATE|os.O_RDWR|os.O_APPEND,
 		0o640,
 	)
 	if err != nil {
